@@ -1465,5 +1465,84 @@ class CrossChunkContextTest(absltest.TestCase):
     self.assertNotIn("Doc1", doc2_chunk2_prompt)
 
 
+class ChunkFilterTest(absltest.TestCase):
+  """Tests for skipping chunks before inference via chunk_filter."""
+
+  def setUp(self):
+    super().setUp()
+    self.mock_language_model = self.enter_context(
+        mock.patch.object(gemini, "GeminiLanguageModel", autospec=True)
+    )
+    self.annotator = annotation.Annotator(
+        language_model=self.mock_language_model,
+        prompt_template=prompting.PromptTemplateStructured(description=""),
+    )
+
+  def test_filtered_chunks_skip_inference_and_documents_stay_in_order(self):
+    documents = [
+        data.Document(text="Skip me entirely.", document_id="doc1"),
+        data.Document(text="Keep first. Drop second.", document_id="doc2"),
+    ]
+    self.mock_language_model.infer.return_value = [[
+        types.ScoredOutput(
+            score=1.0,
+            output=textwrap.dedent(f"""\
+              ```yaml
+              {data.EXTRACTIONS_KEY}:
+              - verb: "Keep"
+              ```"""),
+        )
+    ]]
+    resolver = resolver_lib.Resolver(format_type=data.FormatType.YAML)
+
+    results = list(
+        self.annotator.annotate_documents(
+            documents,
+            resolver=resolver,
+            max_char_buffer=12,
+            batch_length=1,
+            chunk_filter=lambda chunk: chunk.chunk_text.startswith("Keep"),
+            show_progress=False,
+            enable_fuzzy_alignment=False,
+        )
+    )
+
+    self.mock_language_model.infer.assert_called_once()
+    prompts = self.mock_language_model.infer.call_args.kwargs["batch_prompts"]
+    self.assertLen(prompts, 1)
+    self.assertIn("Keep first.", prompts[0])
+    self.assertEqual([r.document_id for r in results], ["doc1", "doc2"])
+    self.assertEmpty(results[0].extractions)
+    self.assertLen(results[1].extractions, 1)
+    self.assertEqual(results[1].extractions[0].char_interval.start_pos, 0)
+
+  def test_chunk_filter_applies_to_every_extraction_pass(self):
+    text = "Keep first. Drop second."
+    self.mock_language_model.infer.return_value = [[
+        types.ScoredOutput(
+            score=1.0,
+            output=textwrap.dedent(f"""\
+              ```yaml
+              {data.EXTRACTIONS_KEY}: []
+              ```"""),
+        )
+    ]]
+    resolver = resolver_lib.Resolver(format_type=data.FormatType.YAML)
+
+    self.annotator.annotate_text(
+        text,
+        resolver=resolver,
+        max_char_buffer=12,
+        batch_length=1,
+        extraction_passes=2,
+        chunk_filter=lambda chunk: chunk.chunk_text.startswith("Keep"),
+        show_progress=False,
+    )
+
+    self.assertEqual(self.mock_language_model.infer.call_count, 2)
+    for call in self.mock_language_model.infer.call_args_list:
+      self.assertNotIn("Drop second", call.kwargs["batch_prompts"][0])
+
+
 if __name__ == "__main__":
   absltest.main()

@@ -183,6 +183,31 @@ and a `batch` config.
 
 See an example of the Vertex AI Batch API usage in [this example](docs/examples/batch_api_example.md).
 
+### Navigating Results from Long Structured Documents
+
+On a long document with headings, such as a regulation, specification or
+manual, a flat list of extractions is hard for an agent or a person to use.
+`lx.document_index` builds a section tree from the headings, with no model
+calls, and files each grounded extraction under its section. A consumer can
+then read a table of contents with counts and open only the sections it needs.
+
+```python
+from langextract import document_index
+
+index = document_index.build_index(result.text)
+index.attach_extractions(result)
+
+print(index.to_toc(hide_empty=True))
+# 0180 | Status Codes [87 status_code]
+#   0206 | Client Error 4xx [29 status_code]
+#     0208 | 401 Unauthorized [1 status_code]
+
+index.section_view("0208")  # that section's extractions as JSON data
+```
+
+The same tree can also choose where to extract before running `lx.extract`,
+through its `chunk_filter` parameter. **[See the RFC 9110 example →](docs/examples/document_index_example.md)**
+
 ## Installation
 
 ### From PyPI

@@ -16,12 +16,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 import dataclasses
 import typing
 import warnings
 
 from langextract import annotation
+from langextract import chunking
 from langextract import factory
 from langextract import io
 from langextract import prompt_validation as pv
@@ -72,6 +73,7 @@ def extract(
     prompt_validation_strict: bool = False,
     show_progress: bool = True,
     tokenizer: tokenizer_lib.Tokenizer | None = None,
+    chunk_filter: Callable[[chunking.TextChunk], bool] | None = None,
 ) -> list[data.AnnotatedDocument] | data.AnnotatedDocument:
   """Extracts structured information from text.
 
@@ -190,6 +192,14 @@ def extract(
       prompt_validation_strict: When True and prompt_validation_level is ERROR,
         raises on non-exact matches (MATCH_FUZZY, MATCH_LESSER). Defaults to False.
       show_progress: Whether to show progress bar during extraction. Defaults to True.
+      chunk_filter: Optional predicate called with each `chunking.TextChunk`
+        before inference. Chunks for which it returns False are skipped
+        entirely: no model call is made and they yield no extractions.
+        Chunk boundaries and the character offsets of surviving extractions
+        are unchanged. With `context_window_chars`, the previous-chunk
+        context comes from the last chunk that passed the filter. Use
+        `lx.document_index.section_chunk_filter` to restrict extraction to
+        sections chosen from a document's table of contents.
 
   Returns:
       An AnnotatedDocument with the extracted information when input is a
@@ -405,6 +415,7 @@ def extract(
         show_progress=show_progress,
         max_workers=max_workers,
         tokenizer=tokenizer,
+        chunk_filter=chunk_filter,
         **alignment_kwargs,
     )
     return result
@@ -429,6 +440,7 @@ def extract(
         show_progress=show_progress,
         max_workers=max_workers,
         tokenizer=tokenizer,
+        chunk_filter=chunk_filter,
         **alignment_kwargs,
     )
     return list(result)

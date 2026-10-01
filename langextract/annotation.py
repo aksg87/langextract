@@ -26,7 +26,7 @@ Usage example:
 from __future__ import annotations
 
 import collections
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 import time
 from typing import DefaultDict
 
@@ -217,6 +217,7 @@ class Annotator:
       context_window_chars: int | None = None,
       show_progress: bool = True,
       tokenizer: tokenizer_lib.Tokenizer | None = None,
+      chunk_filter: Callable[[chunking.TextChunk], bool] | None = None,
       **kwargs,
   ) -> Iterator[data.AnnotatedDocument]:
     """Annotates a sequence of documents with NLP extractions.
@@ -244,6 +245,11 @@ class Annotator:
         resolution across chunk boundaries. Defaults to None (disabled).
       show_progress: Whether to show progress bar. Defaults to True.
       tokenizer: Optional tokenizer to use. If None, uses default tokenizer.
+      chunk_filter: Optional predicate evaluated on each chunk before
+        inference. Chunks for which it returns False are never sent to the
+        model and contribute no extractions. With `context_window_chars`,
+        the previous-chunk context comes from the last chunk that passed the
+        filter. Defaults to None (all chunks).
       **kwargs: Additional arguments passed to LanguageModel.infer and
         Resolver.
 
@@ -266,6 +272,7 @@ class Annotator:
           show_progress,
           context_window_chars=context_window_chars,
           tokenizer=tokenizer,
+          chunk_filter=chunk_filter,
           **kwargs,
       )
     else:
@@ -279,6 +286,7 @@ class Annotator:
           show_progress,
           context_window_chars=context_window_chars,
           tokenizer=tokenizer,
+          chunk_filter=chunk_filter,
           **kwargs,
       )
 
@@ -293,6 +301,7 @@ class Annotator:
       context_window_chars: int | None = None,
       tokenizer: tokenizer_lib.Tokenizer | None = None,
       suppress_parse_errors: bool = False,
+      chunk_filter: Callable[[chunking.TextChunk], bool] | None = None,
       **kwargs,
   ) -> Iterator[data.AnnotatedDocument]:
     """Single-pass annotation with stable ordering and streaming emission.
@@ -348,6 +357,8 @@ class Annotator:
     chunk_iter = _document_chunk_iterator(
         _capture_docs(documents), max_char_buffer, tokenizer=tokenizer
     )
+    if chunk_filter is not None:
+      chunk_iter = filter(chunk_filter, chunk_iter)
     batches = chunking.make_batches_of_textchunk(chunk_iter, batch_length)
 
     model_info = progress.get_model_info(self._language_model)
@@ -457,6 +468,7 @@ class Annotator:
       show_progress: bool = True,
       context_window_chars: int | None = None,
       tokenizer: tokenizer_lib.Tokenizer | None = None,
+      chunk_filter: Callable[[chunking.TextChunk], bool] | None = None,
       **kwargs,
   ) -> Iterator[data.AnnotatedDocument]:
     """Sequential extraction passes logic for improved recall."""
@@ -490,6 +502,7 @@ class Annotator:
           show_progress=show_progress if pass_num == 0 else False,
           context_window_chars=context_window_chars,
           tokenizer=tokenizer,
+          chunk_filter=chunk_filter,
           **kwargs,
       ):
         doc_id = annotated_doc.document_id
@@ -543,6 +556,7 @@ class Annotator:
       context_window_chars: int | None = None,
       show_progress: bool = True,
       tokenizer: tokenizer_lib.Tokenizer | None = None,
+      chunk_filter: Callable[[chunking.TextChunk], bool] | None = None,
       **kwargs,
   ) -> data.AnnotatedDocument:
     """Annotates text with NLP extractions for text input.
@@ -564,6 +578,8 @@ class Annotator:
         (disabled).
       show_progress: Whether to show progress bar. Defaults to True.
       tokenizer: Optional tokenizer instance.
+      chunk_filter: Optional predicate deciding which chunks are sent to the
+        model; see `annotate_documents`.
       **kwargs: Additional arguments for inference and resolver_lib.
 
     Returns:
@@ -595,6 +611,7 @@ class Annotator:
             context_window_chars=context_window_chars,
             show_progress=show_progress,
             tokenizer=tokenizer,
+            chunk_filter=chunk_filter,
             **kwargs,
         )
     )
