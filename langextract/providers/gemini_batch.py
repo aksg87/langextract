@@ -273,13 +273,14 @@ def _build_request(
     gen_config: dict | None,
     system_instruction: str | None = None,
     safety_settings: Sequence[Any] | None = None,
+    tools: Sequence[Any] | None = None,
 ) -> dict:
   """Build a batch request in REST format for file-based submission.
 
   Constructs a properly formatted request dictionary for batch processing.
   Per the Gemini Batch API documentation, each request in the JSONL file
   can include its own generationConfig with schema and generation parameters,
-  as well as top-level systemInstruction and safetySettings.
+  as well as top-level systemInstruction, safetySettings, and tools.
 
   Args:
     prompt: The text prompt to send to the model.
@@ -290,15 +291,23 @@ def _build_request(
     gen_config: Optional generation configuration parameters.
     system_instruction: Optional system instruction text.
     safety_settings: Optional safety settings sequence.
+    tools: Optional tools sequence (e.g., google_search).
 
   Returns:
     A dictionary formatted for REST API file-based submission, containing:
       * contents: The prompt content.
       * systemInstruction: Optional system instructions.
       * safetySettings: Optional safety settings.
+      * tools: Optional tools.
       * generationConfig: Optional generation configuration and schema.
   """
-  request = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+  request: dict[str, Any] = {
+      "contents": [{"role": "user", "parts": [{"text": prompt}]}]
+  }
+
+  effective_gen_config = dict(gen_config) if gen_config else {}
+  gen_config_tools = effective_gen_config.pop("tools", None)
+  effective_tools = tools if tools is not None else gen_config_tools
 
   if system_instruction:
     request["systemInstruction"] = {"parts": [{"text": system_instruction}]}
@@ -306,7 +315,10 @@ def _build_request(
   if safety_settings:
     request["safetySettings"] = safety_settings
 
-  if schema_config or gen_config:
+  if effective_tools:
+    request["tools"] = effective_tools
+
+  if schema_config or effective_gen_config:
     generation_config = {}
     if schema_config:
       json_schema = schema_config.get("response_json_schema")
@@ -318,8 +330,8 @@ def _build_request(
       generation_config["responseMimeType"] = schema_config.get(
           "response_mime_type", _MIME_TYPE_JSON
       )
-    if gen_config:
-      for k, v in gen_config.items():
+    if effective_gen_config:
+      for k, v in effective_gen_config.items():
         generation_config[_snake_to_camel(k)] = v
     request["generationConfig"] = generation_config
 
@@ -779,6 +791,7 @@ def infer_batch(
     cfg: BatchConfig,
     system_instruction: str | None = None,
     safety_settings: Sequence[Any] | None = None,
+    tools: Sequence[Any] | None = None,
     project: str | None = None,
     location: str | None = None,
 ) -> list[str]:
@@ -802,6 +815,7 @@ def infer_batch(
     cfg: Batch configuration including thresholds, timeouts, and error handling.
     system_instruction: Optional system instruction text.
     safety_settings: Optional safety settings sequence.
+    tools: Optional tools sequence (e.g., google_search).
     project: Google Cloud project ID (optional, overrides client/env).
     location: Vertex AI location (optional, overrides client/env).
 
@@ -863,6 +877,7 @@ def infer_batch(
           "system_instruction": system_instruction,
           "gen_config": gen_config,
           "safety_settings": safety_settings,
+          "tools": tools,
           "schema": schema_config,
       })
 
@@ -898,7 +913,12 @@ def infer_batch(
     batch_prompts = [p for _, p in batch_items]
     requests = [
         _build_request(
-            p, schema_config, gen_config, system_instruction, safety_settings
+            p,
+            schema_config,
+            gen_config,
+            system_instruction,
+            safety_settings,
+            tools,
         )
         for p in batch_prompts
     ]
@@ -957,6 +977,7 @@ def infer_batch(
           "system_instruction": system_instruction,
           "gen_config": gen_config,
           "safety_settings": safety_settings,
+          "tools": tools,
           "schema": schema_config,
       }
       upload_list.append((key_data, text))

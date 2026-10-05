@@ -1309,6 +1309,79 @@ class BatchOutputSchemaRequestTest(absltest.TestCase):
             generation_config["responseMimeType"], "application/json"
         )
 
+  def test_build_request_places_tools_at_top_level(self):
+    tools = [{"google_search": {}}]
+    request = gb._build_request(
+        "prompt",
+        None,
+        {"temperature": 0.0, "candidate_count": 1},
+        tools=tools,
+    )
+
+    self.assertEqual(request["tools"], tools)
+    self.assertNotIn("tools", request["generationConfig"])
+    self.assertEqual(
+        request["generationConfig"],
+        {"temperature": 0.0, "candidateCount": 1},
+    )
+
+  def test_build_request_lifts_tools_out_of_gen_config(self):
+    tools = [{"google_search": {}}]
+    gen_config = {"tools": tools}
+    request = gb._build_request("prompt", None, gen_config)
+
+    self.assertEqual(request["tools"], tools)
+    self.assertNotIn("generationConfig", request)
+    self.assertIn("tools", gen_config)
+
+  @mock.patch.object(genai, "Client", autospec=True)
+  def test_batch_places_tools_at_top_level_and_forwards_thinking_config(
+      self, mock_client_cls
+  ):
+    """Batch requests place tools at top level and forward thinkingConfig."""
+    mock_client = mock_client_cls.return_value
+    mock_client.vertexai = True
+
+    with mock.patch.object(gb.storage, "Client", autospec=True) as storage_cls:
+      bucket = storage_cls.return_value.bucket.return_value
+      output_blob = mock.create_autospec(gb.storage.Blob, instance=True)
+      output_blob.name = f"output{gb._EXT_JSONL}"
+      output_blob.open.return_value.__enter__.return_value = io.StringIO(
+          _create_batch_response(0, {"extractions": []})
+      )
+      bucket.list_blobs.return_value = [output_blob]
+
+      mock_client.batches.create.return_value = create_mock_batch_job()
+      mock_client.batches.get.return_value = create_mock_batch_job()
+
+      tools = [{"google_search": {}}]
+      thinking_config = {"thinking_level": "minimal"}
+      model = gemini.GeminiLanguageModel(
+          model_id="gemini-3.5-flash",
+          vertexai=True,
+          project="p",
+          location="l",
+          tools=tools,
+          thinking_config=thinking_config,
+          batch={
+              "enabled": True,
+              "threshold": 1,
+              "enable_caching": False,
+              "retention_days": None,
+          },
+      )
+
+      with mock.patch.object(gb, "_submit_file", autospec=True) as mock_submit:
+        mock_submit.return_value = create_mock_batch_job()
+
+        list(model.infer(["test prompt"]))
+
+        request = mock_submit.call_args[0][2][0]
+        self.assertEqual(request["tools"], tools)
+        generation_config = request["generationConfig"]
+        self.assertNotIn("tools", generation_config)
+        self.assertEqual(generation_config["thinkingConfig"], thinking_config)
+
 
 if __name__ == "__main__":
   absltest.main()
