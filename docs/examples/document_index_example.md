@@ -7,9 +7,12 @@ into a tree, so a reader or an agent can scan a short table of contents first
 and open only the nodes it needs. Every leaf keeps its original `Extraction`
 objects, with their character offsets into the source text.
 
-Each level of the tree is a key function that maps an extraction to a group
-name: `by_text`, `by_class`, `by_attribute(name)`, or any function with the
-same signature. Building the index makes no model calls.
+Each level of the tree is a rule for grouping the level below. The first level
+is always a key function that maps an extraction to a group name: `by_text`,
+`by_class`, `by_attribute(name)`, or any function with the same signature. It
+makes no model calls. The levels above it can be key functions too, or
+natural-language instructions such as "Group the characters by household" that
+a language model applies.
 
 ## Example: HTTP status codes in RFC 9110
 
@@ -129,14 +132,68 @@ Leaves are only as clean as the key function. In this run, `FRIAR LAWRENCE`
 extractions such as `THEE` get leaves of their own. To merge such leaves, map
 the aliases to one name inside the key function.
 
+### Letting the model organize a level
+
+No key function can tell which household a character belongs to. For that,
+describe the level in words and pass `model_id` (or a `model` instance):
+
+```python
+rj_index = document_index.build_index(
+    rj_result,
+    levels=[
+        character_key,
+        "Group the characters by household: Montague, Capulet, the Prince"
+        " and his kinsmen, the Church, or Other for anything that is not a"
+        " character.",
+    ],
+    model_id="gemini-3.5-flash",
+)
+print(rj_index.to_toc(max_depth=0))
+```
+
+```
+0001 | Montague [132 character, 113 emotion, 88 relationship] — Members, relatives, and loyal servants of the Montague household.
+0008 | Capulet [207 character, 186 emotion, 105 relationship] — Members, relatives, servants, and close associates of the Capulet household.
+0028 | The Prince and his kinsmen [58 character, 41 emotion, 20 relationship] — Prince Escalus, his noble kinsmen Mercutio and Paris, and the officers of the watch.
+0038 | The Church [34 character, 23 emotion, 9 relationship] — Religious figures, including Friar Lawrence and Friar John, who offer spiritual guidance.
+0042 | Other [16 character, 14 emotion, 2 relationship] — Non-character concepts, personifications, and minor external figures not affiliated with the main households.
+```
+
+The model never sees the source text. It gets one prompt listing the 51 leaves
+by title, extraction counts and summary, and replies with titled groups, each
+with a one-sentence summary. An agent looking for the Capulets now reads these
+5 lines, opens node `0008` to see its 19 character leaves, and then opens only
+the leaves it needs. If a reply leaves a node out, that node goes under a group
+named `Other`, so every extraction stays in the tree.
+
+Model output varies from build to build, so the output above is one build. In
+3 builds with `gemini-3.5-flash` at temperature 0 on these 51 leaves:
+
+- **Cost.** Each build made 1 model call with a 2,512-token prompt. Replies
+  were 437–481 output tokens plus 4,435–7,691 thinking tokens, and a build
+  took 16–40 seconds (median 22).
+- **Accuracy.** For 25 of the named characters, the play leaves no doubt
+  about the household. The builds placed 23, 25 and 25 of them under the right
+  root; the first build put `ROSALINE` and `SAMPSON AND GREGORY` under
+  `Other`.
+- **Shape.** Two builds returned the 5 requested roots. The third split
+  `Other` into characters and non-characters, for 6. No build left a node out
+  of its reply, and all 1,048 extractions were present in every tree.
+
 ## Notes
 
 - **Every extraction is kept.** Each input extraction is in exactly one leaf,
   and `index.all_extractions()` returns all of them. `find(node_id)` returns a
   node, and `path(node)` gives its titles from the root down.
-- **Parent levels read each node's first extraction.** Above the leaves, the
-  key function is called on the first extraction in each node. Choose parent
-  keys that every extraction in a node shares, as `http_class` does for leaves
-  built with `by_text`.
-- **Deterministic.** The same extractions and key functions always produce the
-  same tree and node ids. Groups are ordered by their first extraction.
+- **Parent-level key functions read each node's first extraction.** Above the
+  leaves, a key function is called on the first extraction in each node. Choose
+  parent keys that every extraction in a node shares, as `http_class` does for
+  leaves built with `by_text`.
+- **Key-function levels are deterministic.** The same extractions and key
+  functions always produce the same tree and node ids. Groups are ordered by
+  their first extraction. Model levels are not deterministic; their titles,
+  summaries and group boundaries can change between builds.
+- **Model levels are batched.** A level with more nodes than `batch_size`
+  (default 100) is sent in several prompts, and groups from different batches
+  are not merged. To cap the number of roots, set `max_roots`, which reapplies
+  the last rule until the top level is small enough.
